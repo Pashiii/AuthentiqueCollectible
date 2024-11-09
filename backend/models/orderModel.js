@@ -21,6 +21,7 @@ const orderSchema = new mongoose.Schema(
           eta: Date,
           timeEnd: Date,
         },
+        remainingBalance: Number,
       },
     ],
     addressInfo: {
@@ -34,6 +35,7 @@ const orderSchema = new mongoose.Schema(
       phone: Number,
       notes: String,
     },
+    reserved: Date,
     orderStatus: String,
     paymentMethod: String,
     paymentStatus: String,

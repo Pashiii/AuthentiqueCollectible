@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .search-bar {
+    @apply w-0 group-hover:w-[300px] focus:w-[300px] xl:group-hover:w-[500px] xl:focus:w-[500px] transition-all duration-300 rounded-full group-hover:border group-hover:border-brandGray px-5 py-2
+    focus:outline-none border-brandGray bg-brandGray group-hover:bg-brandGray;
+  }
+  .nav-menu.active {
+    @apply left-0;
+  }
+  .nav-menu {
+    @apply top-0 h-[100vh] left-[-100%] fixed w-[65%] bg-secondary px-4 py-4 z-[9999] transition-all duration-500 lg:hidden;
+  }
+
+  .nav-bg.active {
+    @apply fixed w-full h-full top-0  bg-black/60 z-[9999999] lg:hidden;
+  }
+  .image-transition {
+    @apply transition-opacity duration-500 ease-in opacity-0;
+  }
+  .image-transition.show {
+    @apply opacity-100;
+  }
+  .slider {
+    @apply w-[full] h-2 bg-gray-300 my-2 rounded-[10px];
+  }
+  .slider .thumb {
+    @apply top-[-50%] w-[18px] h-4 cursor-pointer border-black border-[6px] rounded-full bg-white;
+  }
+}
+
+.slick-slide > div {
+  margin: 0 1px;
+}
+
+.img-filter {
+  filter: drop-shadow(5px 5px 10px #000);
+}

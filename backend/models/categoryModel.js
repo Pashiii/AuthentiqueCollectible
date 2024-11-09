@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 
 const categorySchema = new mongoose.Schema(
   {
-    category: { type: String, unique: true, required: true },
+    productType: String,
+    category: { type: String, required: true, unique: true },
     author: { type: mongoose.Types.ObjectId, ref: "User" },
   },
   {

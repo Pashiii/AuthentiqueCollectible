@@ -23,6 +23,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.9.0",
     "mongoose": "^8.6.3",
+    "node-cron": "^3.0.3",
     "nodemailer": "^6.9.15",
     "paypal-rest-sdk": "^1.8.1",
     "slugify": "^1.6.6",

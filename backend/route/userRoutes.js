@@ -4,6 +4,7 @@ import generateToken from "../middleware/generateToken.js";
 import verifyToken from "../middleware/verifyToken.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import cloudinary from "../components/cloudinary.js";
 
 import { sendEmail } from "../middleware/email.js";
 
@@ -11,10 +12,31 @@ const router = express.Router();
 
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, firstname, lastname, birthday } = req.body;
+    const {
+      email,
+      password,
+      firstname,
+      lastname,
+      birthday,
+      address,
+      contact,
+      verificationID,
+    } = req.body;
     const userExist = await User.findOne({ email });
     if (userExist) {
       return res.status(400).send({ message: "User already exist" });
+    }
+    const uploadedImages = [];
+    for (const img of verificationID) {
+      const result = await cloudinary.uploader.upload(img, {
+        folder: "user",
+        // width: 300,
+        // crop: "scale",
+      });
+      uploadedImages.push({
+        public_id: result.public_id,
+        url: result.secure_url,
+      });
     }
 
     const user = new User({
@@ -23,6 +45,9 @@ router.post("/register", async (req, res) => {
       firstname,
       lastname,
       birthday,
+      address,
+      contact,
+      verificationID: { image: uploadedImages },
       verificationTokenExpireAt: Date.now() + 5 * 60 * 1000,
     });
 
@@ -43,7 +68,8 @@ router.post("/register", async (req, res) => {
       subject: "Verify Your Account",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-          <img src="images/logo.png" style="display: block; margin: 0 auto;"/>
+          <img src="https://res.cloudinary.com/dlmqvaqoi/image/upload/v1730730501/vjlrxl7oewvm9quwfmg0.png" style="display: block; margin: 0 auto; width: 120px;"/>
+          <h1 style="text-align: center">Authentique Collectible</h1>
           <h2 style="color: #333;">Welcome to Authentique Collectible!</h2>
           <p style="color: #555;">Thank you for registering with us. Please verify your email address to activate your account.</p>
           <p style="color: #555;">Click the button below to verify your account:</p>
@@ -92,7 +118,8 @@ router.post("/login", async (req, res) => {
           subject: "Verify Your Account",
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-              <img src="images/logo.png" style="display: block; margin: 0 auto;"/>
+              <img src="https://res.cloudinary.com/dlmqvaqoi/image/upload/v1730730501/vjlrxl7oewvm9quwfmg0.png" style="display: block; margin: 0 auto; width: 120px;"/>
+              <h1 style="text-align: center">Authentique Collectible</h1>
               <h2 style="color: #333;">Welcome to Authentique Collectible!</h2>
               <p style="color: #555;">Thank you for registering with us. Please verify your email address to activate your account.</p>
               <p style="color: #555;">Click the button below to verify your account:</p>
@@ -379,7 +406,8 @@ router.post("/forget-password", async (req, res) => {
         subject: "Reset Your Password",
         html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-              <img src="images/logo.png" style="display: block; margin: 0 auto;"/>
+              <img src="https://res.cloudinary.com/dlmqvaqoi/image/upload/v1730730501/vjlrxl7oewvm9quwfmg0.png" style="display: block; margin: 0 auto; width: 120px;"/>
+              <h1 style="text-align: center">Authentique Collectible</h1>
               <h2 style="color: #333;">Reset Your Password</h2>
               <p style="color: #555;">We received a request to reset your password. Click the button below to reset it:</p>
               <a href="${link}" style="display: inline-block; padding: 10px 20px; margin: 10px 0; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a>
@@ -414,6 +442,9 @@ router.patch("/change-password/:id", async (req, res) => {
       return res.status(401).send({ message: "Current Password Not Match" });
     }
     if (newPassword !== undefined) user.password = newPassword;
+    user.verificationID = {
+      ...user.verificationID,
+    };
     await user.save();
     res.status(200).send({ message: "Successful Change Password" });
   } catch (error) {
@@ -447,7 +478,8 @@ router.put("/reset-password/:id/:token", async (req, res) => {
       subject: "Your Password Has Been Changed Successfully",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-          <img src="images/logo.png" alt="Company Logo" style="display: block; margin: 0 auto;"/>
+          <img src="https://res.cloudinary.com/dlmqvaqoi/image/upload/v1730730501/vjlrxl7oewvm9quwfmg0.png" style="display: block; margin: 0 auto; width: 120px;"/>
+          <h1 style="text-align: center">Authentique Collectible</h1>
           <h2 style="color: #333;">Password Changed Successfully</h2>
           <p style="color: #555;">Hello,</p>
           <p style="color: #555;">We wanted to let you know that your password has been changed successfully. If you did not make this change, please contact our support team immediately.</p>
@@ -543,6 +575,30 @@ router.get("/verify/:id/:token", async (req, res) => {
   } catch (error) {
     console.log("Error verifying account", error);
     res.status(500).send({ message: "Error verifying your account" });
+  }
+});
+
+//verification id for auction
+router.patch("/change-verification/:id", async (req, res) => {
+  const { id } = req.params;
+  const { verification } = req.body;
+  try {
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+    if (!user.verificationID) {
+      return res
+        .status(400)
+        .send({ message: "User does not have a verification ID" });
+    }
+    user.verificationID.verified = verification;
+    console.log(user);
+    await user.save();
+    return res.status(200).send({ message: "Verification id updated" });
+  } catch (error) {
+    console.log("Failed to verify the valid id", error);
+    return res.status(500).send({ message: "Failed to verify valid id" });
   }
 });
 

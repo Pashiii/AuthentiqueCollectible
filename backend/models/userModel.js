@@ -23,12 +23,18 @@ const userSchema = new mongoose.Schema(
     lastname: String,
     birthday: Date,
     isVerified: { type: Boolean, default: false },
-    verificationID: [
-      {
-        image: [{ type: String }],
+    verificationID: {
+      type: {
+        image: [
+          {
+            public_id: { type: String },
+            url: { type: String },
+          },
+        ],
         verified: { type: Boolean, default: false },
       },
-    ],
+      default: {},
+    },
     resetPasswordToken: String,
     resetPasswordExpireAt: Date,
     verificationToken: String,

@@ -4,11 +4,13 @@ import { Server } from "socket.io";
 import http from "http";
 import cloudinary from "../components/cloudinary.js";
 import { sendEmail } from "../middleware/email.js";
+import Orders from "../models/orderModel.js";
 
 const router = express.Router();
 
 const app = express();
 const server = http.createServer(app);
+
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -152,7 +154,30 @@ router.post("/bid/winner/:id", async (req, res) => {
       (max, e) => (e.bid > max.bid ? e : max),
       { bid: 0 }
     );
-    console.log(highestBid);
+    const data = {
+      userId: highestBid.userId,
+      cartItems: [
+        {
+          productId: auction._id,
+          category: auction.category,
+          title: auction.title,
+          slug: auction.slug,
+          image: auction.image[0].url,
+          price: highestBid.bid,
+          stock: auction.stocks,
+          quantity: 1,
+          properties: {
+            saleType: auction.properties,
+          },
+        },
+      ],
+      totalAmount: highestBid.bid,
+      orderStatus: "",
+    };
+
+    const auctionOrder = new Orders(data);
+    await auctionOrder.save();
+    const checkoutLink = `http://localhost:5173/auction/checkout/${auction.slug}/${auctionOrder._id}`;
 
     if (highestBid) {
       await sendEmail({
@@ -160,7 +185,8 @@ router.post("/bid/winner/:id", async (req, res) => {
         subject: "Congratulations! You've Won the Auction",
         html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
-          <img src="images/logo.png" style="display: block; margin: 0 auto;"/>
+          <img src="https://res.cloudinary.com/dlmqvaqoi/image/upload/v1730730501/vjlrxl7oewvm9quwfmg0.png" style="display: block; margin: 0 auto; width: 120px;"/>
+          <h1 style="text-align: center">Authentique Collectible</h1>
           <h2 style="color: #333;">Congratulations!</h2>
           <p style="color: #555;">You are the highest bidder for the item: <strong>${
             auction.title
@@ -172,7 +198,7 @@ router.post("/bid/winner/:id", async (req, res) => {
               maximumFractionDigits: 2,
             }
           )}</strong>.</p>
-          <a href="$" style="display: inline-block; padding: 10px 20px; margin: 10px 0; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Proceed to Checkout</a>
+          <a href=${checkoutLink} style="display: inline-block; padding: 10px 20px; margin: 10px 0; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Proceed to Checkout</a>
           <p style="color: #555;">Please complete your payment within the next 48 hours to secure your item.</p>
           <p style="color: #555;">If the button does not work, copy and paste the following link into your browser:</p>
           <p style="color: #007BFF; word-break: break-all;">$</p>
@@ -181,7 +207,12 @@ router.post("/bid/winner/:id", async (req, res) => {
         `,
       });
     }
-  } catch (error) {}
+
+    res.status(200).send({ message: "Success", checkoutLink, auctionOrder });
+  } catch (error) {
+    console.log("Failed to create auction order", error);
+    return res.status(500).send({ message: "Failed to create auction order" });
+  }
 });
 
 //edit auction
@@ -240,6 +271,26 @@ router.patch("/edit/:id", async (req, res) => {
   } catch (error) {
     console.log("Failed to update auction", error);
     res.status(500).send({ message: "Failed to update auction" });
+  }
+});
+
+router.patch("/stop-continue/:id", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  console.log(status);
+  try {
+    const auction = await Auction.findById(id);
+    if (!auction) {
+      return res.status(404).send({ message: "Auction not found" });
+    }
+    auction.countdown.status = status;
+    await auction.save();
+    return res.status(200).send({ message: `Auction status is now ${status}` });
+  } catch (error) {
+    console.log("Failed to stop or continue auction", error);
+    return res
+      .status(500)
+      .send({ message: "Failed to stop or continue auction" });
   }
 });
 

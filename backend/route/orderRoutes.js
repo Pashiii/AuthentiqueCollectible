@@ -2,16 +2,64 @@ import express from "express";
 import Orders from "../models/orderModel.js";
 import paypal from "../components/paypal.js";
 import Products from "../models/productModel.js";
-import axios from "axios";
 import tokenVerification from "../middleware/tokenVerification.js";
 import jwt from "jsonwebtoken";
+import cron from "node-cron";
 
 const router = express.Router();
 
-//creating paypal payment
+//removing unpaid
+cron.schedule("0 0 * * *", async () => {
+  console.log("Running a job to clean up unpaid orders...");
+
+  try {
+    const now = new Date();
+    // Find all orders that are unpaid and where the reservation period has expired.
+    const unpaidOrders = await Orders.find({
+      paymentStatus: "Unpaid",
+      reserved: { $lte: now },
+    });
+
+    if (unpaidOrders.length === 0) {
+      console.log("No unpaid orders to delete.");
+      return;
+    }
+
+    for (const order of unpaidOrders) {
+      console.log(`Deleting order: ${order._id} - User: ${order.userId}`);
+
+      // Restore stock for each item in the order before deleting it.
+      for (const item of order.cartItems) {
+        const product = await Products.findById(item.productId);
+        if (product) {
+          product.stocks += item.quantity;
+          await product.save();
+        }
+      }
+
+      // Delete the order
+      await Orders.findByIdAndDelete(order._id);
+    }
+
+    console.log("Successfully deleted unpaid orders.");
+  } catch (error) {
+    console.error("Error cleaning up unpaid orders:", error);
+  }
+});
+
+//create order
 router.post("/payment-process", async (req, res) => {
   try {
-    const { cartItems, totalAmount } = req.body;
+    const {
+      paymentId,
+      payerId,
+      userId,
+      cartItems,
+      addressInfo,
+      totalAmount,
+      paymentMethod,
+      transactionMethod,
+    } = req.body;
 
     const create_payment_json = {
       intent: "sale",
@@ -50,6 +98,86 @@ router.post("/payment-process", async (req, res) => {
           details: error.response.details,
         });
       } else {
+        const estimateReserve = new Date();
+        estimateReserve.setDate(estimateReserve.getDate() + 3);
+        const newlyCreatedOrder = new Orders({
+          userId,
+          cartItems,
+          addressInfo,
+          orderStatus: "To Pay",
+          paymentMethod: paymentMethod,
+          transactionMethod: transactionMethod,
+          paymentStatus: "Unpaid",
+          totalAmount,
+          orderDate: new Date(),
+          orderUpdateDate: new Date(),
+          paymentId,
+          payerId,
+          reserved: estimateReserve,
+        });
+
+        for (const item of cartItems) {
+          const product = await Products.findById(item.productId);
+          if (!product || product.stocks < item.quantity) {
+            return res.status(400).send({
+              message: `Not enough stock for ${item.name}`,
+            });
+          }
+
+          product.stocks -= item.quantity;
+          await product.save();
+        }
+
+        await newlyCreatedOrder.save();
+
+        const approvalURL = paymentInfo.links.find(
+          (link) => link.rel === "approval_url"
+        ).href;
+
+        res.status(201).send({
+          message: "Successfully Order Place!",
+          approvalURL,
+          myOrder: newlyCreatedOrder,
+        });
+      }
+    });
+  } catch (error) {
+    console.log("Some error occured", error);
+    res.status(500).send({ message: "Some error occured!" });
+  }
+});
+
+//creating a remaining payment
+router.post("/remaining-payment", async (req, res) => {
+  try {
+    const { remainingPayment } = req.body;
+    const create_payment_json = {
+      intent: "sale",
+      payer: {
+        payment_method: "paypal",
+      },
+      redirect_urls: {
+        return_url: `http://localhost:5173/remaining-payment/processing`,
+        cancel_url: `http://localhost:5173/`,
+      },
+      transactions: [
+        {
+          amount: {
+            currency: "PHP",
+            total: remainingPayment,
+          },
+          description: "description",
+        },
+      ],
+    };
+    paypal.payment.create(create_payment_json, async (error, paymentInfo) => {
+      if (error) {
+        console.log(error);
+        return res.status(500).send({
+          message: "Error while creating PayPal payment",
+          details: error.response.details,
+        });
+      } else {
         const approvalURL = paymentInfo.links.find(
           (link) => link.rel === "approval_url"
         ).href;
@@ -63,23 +191,115 @@ router.post("/payment-process", async (req, res) => {
   }
 });
 
+//paying the unpaid
+router.post("/pay-order", async (req, res) => {
+  const { orderId } = req.body;
+  try {
+    const myOrder = await Orders.findById(orderId);
+    if (!myOrder) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+    const create_payment_json = {
+      intent: "sale",
+      payer: {
+        payment_method: "paypal",
+      },
+      redirect_urls: {
+        return_url: `http://localhost:5173/payment/processing`,
+        cancel_url: `http://localhost:5173/`,
+      },
+      transactions: [
+        {
+          amount: {
+            currency: "PHP",
+            total: myOrder.totalAmount,
+          },
+          description: "description",
+        },
+      ],
+    };
+    paypal.payment.create(create_payment_json, async (error, paymentInfo) => {
+      if (error) {
+        console.log(error);
+        return res.status(500).send({
+          message: "Error while creating PayPal payment",
+          details: error.response.details,
+        });
+      } else {
+        const approvalURL = paymentInfo.links.find(
+          (link) => link.rel === "approval_url"
+        ).href;
+
+        res.status(201).send({ approvalURL });
+      }
+    });
+  } catch (error) {}
+});
+
+//checking payment of remaining balance
+router.post("/payment-remaining", async (req, res) => {
+  const { paymentId, payerId, orderId, remainingPay } = req.body;
+  try {
+    const order = await Orders.findById(orderId);
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+    const execute_payment_json = {
+      payer_id: payerId,
+      transactions: [
+        {
+          amount: {
+            currency: "PHP",
+            total: remainingPay,
+          },
+        },
+      ],
+    };
+    paypal.payment.execute(
+      paymentId,
+      execute_payment_json,
+      async (error, payment) => {
+        if (error) {
+          console.log(error.response);
+          return res
+            .status(500)
+            .send({ message: "Payment execution failed", error });
+        }
+        if (payment.state === "approved") {
+          let totalRemainingBalance = 0;
+          order.cartItems.forEach((item) => {
+            if (item.remainingBalance) {
+              totalRemainingBalance += item.remainingBalance;
+              item.price += item.remainingBalance;
+
+              item.remainingBalance = 0;
+            }
+          });
+          order.totalAmount += totalRemainingBalance;
+
+          await order.save();
+
+          return res.status(201).send({ message: "Payment successful" });
+        } else {
+          return res.status(400).send({ message: "Payment not approved" });
+        }
+      }
+    );
+  } catch (error) {
+    console.log("Failed payment the remaining balance", error);
+    return res
+      .status(500)
+      .send({ message: "Failed payment the remaining balance" });
+  }
+});
+
 //checking payment paid & creating order
 router.post("/payment-confirm", tokenVerification, async (req, res) => {
-  const {
-    paymentId,
-    payerId,
-    userId,
-    cartItems,
-    addressInfo,
-    totalAmount,
-    paymentMethod,
-    orderStatus,
-  } = req.body;
-
+  const { paymentId, payerId, orderId, totalAmount, orderStatus } = req.body;
   try {
-    const existingOrder = await Orders.findOne({ paymentId });
-    if (existingOrder) {
-      return res.status(409).send({ message: "Order already exists" });
+    const order = await Orders.findById(orderId);
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
     }
     const execute_payment_json = {
       payer_id: payerId,
@@ -98,7 +318,7 @@ router.post("/payment-confirm", tokenVerification, async (req, res) => {
       execute_payment_json,
       async (error, payment) => {
         if (error) {
-          console.log(error.response);
+          console.log("Payment execution failed:", error);
           return res
             .status(500)
             .send({ message: "Payment execution failed", error });
@@ -106,35 +326,14 @@ router.post("/payment-confirm", tokenVerification, async (req, res) => {
         const estimateDate = new Date();
         estimateDate.setDate(estimateDate.getDate() + 3);
         if (payment.state === "approved") {
-          const order = new Orders({
-            userId,
-            cartItems,
-            addressInfo,
-            orderStatus,
-            paymentMethod: paymentMethod,
-            paymentStatus: "Paid",
-            totalAmount,
-            orderDate: new Date(),
-            orderUpdateDate: new Date(),
-            paymentId: paymentId,
-            payerId: payerId,
-            estimatedDate: estimateDate,
-          });
-
-          for (const item of cartItems) {
-            const product = await Products.findById(item.productId);
-            if (!product || product.stocks < item.quantity) {
-              return res.status(400).send({
-                message: `Not enough stock for ${item.name}`,
-              });
-            }
-
-            product.stocks -= item.quantity;
-            await product.save();
-          }
+          order.paymentId = paymentId;
+          order.payerId = payerId;
+          order.orderStatus = orderStatus;
+          order.paymentStatus = "Paid";
+          order.estimatedDate = estimateDate;
 
           await order.save();
-          res.status(201).send({ message: "Order Confirmed", order });
+          res.status(201).send({ message: "Payment Confirmed", order });
         } else {
           res.status(400).send({ message: "Payment not approved" });
         }
@@ -143,6 +342,28 @@ router.post("/payment-confirm", tokenVerification, async (req, res) => {
   } catch (error) {
     console.log("Error confirming payment:", error);
     res.status(500).send({ message: "Error confirming payment", error });
+  }
+});
+
+//cancel order
+router.delete("/cancel-order/:id", async (req, res) => {
+  const { id } = req.params;
+  const { cartItems } = req.body;
+  try {
+    const cancelOrder = await Orders.findByIdAndDelete(id);
+    if (!cancelOrder) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+
+    for (const item of cartItems) {
+      const product = await Products.findById(item.productId);
+      product.stocks += item.quantity;
+      await product.save();
+    }
+    res.status(200).send({ message: "Order cancelled successfull" });
+  } catch (error) {
+    console.log("Failed to cancel order", error);
+    res.status(500).send({ message: "Failed to cancel order" });
   }
 });
 
@@ -238,6 +459,111 @@ router.get("/:id", async (req, res) => {
       return res.status(404).send({ message: "Order Not Found" });
     }
     res.status(200).send(order);
+  } catch (error) {}
+});
+
+//update order status
+router.put("/status/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { orderStatus } = req.body;
+    const order = await Orders.findById(orderId);
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+    if (orderStatus === "To Receive") {
+      const estimateDate = new Date();
+      estimateDate.setDate(estimateDate.getDate() + 3);
+      order.estimatedDate = estimateDate;
+    }
+
+    order.orderStatus = orderStatus;
+    await order.save();
+    res
+      .status(201)
+      .send({ message: "Status updated successfully", order: order });
+  } catch (error) {
+    console.log("Failed to update order status", error);
+    res.status(500).send({ message: "Failed to update order status" });
+  }
+});
+
+router.put("/auction-order/:id", async (req, res) => {
+  const { id } = req.params;
+  const {
+    totalAmount,
+    addressInfo,
+    paymentMethod,
+    transactionMethod,
+    cartItems,
+  } = req.body;
+  try {
+    const auctionOrder = await Orders.findById(id);
+
+    if (!auctionOrder) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+    const create_payment_json = {
+      intent: "sale",
+      payer: {
+        payment_method: "paypal",
+      },
+      redirect_urls: {
+        return_url: `http://localhost:5173/payment/processing`,
+        cancel_url: `http://localhost:5173/shop/paypal-cancel`,
+      },
+      transactions: [
+        {
+          // item_list: {
+          //   items: cartItems.map((item) => ({
+          //     name: item.title,
+          //     sku: item.productId,
+          //     price: item.price.toFixed(2),
+          //     currency: "PHP",
+          //     quantity: item.quantity,
+          //   })),
+          // },
+          amount: {
+            currency: "PHP",
+            total: totalAmount.toFixed(2),
+          },
+          description: "description",
+        },
+      ],
+    };
+    paypal.payment.create(create_payment_json, async (error, paymentInfo) => {
+      if (error) {
+        console.log(error);
+        return res.status(500).send({
+          message: "Error while creating PayPal payment",
+          details: error.response.details,
+        });
+      } else {
+        const estimateReserve = new Date();
+        estimateReserve.setDate(estimateReserve.getDate() + 3);
+        auctionOrder.addressInfo = addressInfo;
+        auctionOrder.paymentMethod = paymentMethod;
+        auctionOrder.reserved = estimateReserve;
+        auctionOrder.orderDate = new Date();
+        auctionOrder.orderUpdateDate = new Date();
+        auctionOrder.paymentStatus = "Unpaid";
+        auctionOrder.orderStatus = "To Pay";
+        auctionOrder.transactionMethod = transactionMethod;
+        auctionOrder.paymentId = "";
+        auctionOrder.payerId = "";
+        await auctionOrder.save();
+
+        const approvalURL = paymentInfo.links.find(
+          (link) => link.rel === "approval_url"
+        ).href;
+
+        res.status(201).send({
+          message: "Successfully Order Place!",
+          approvalURL,
+          myOrder: auctionOrder,
+        });
+      }
+    });
   } catch (error) {}
 });
 

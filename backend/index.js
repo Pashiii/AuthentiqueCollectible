@@ -12,6 +12,7 @@ import bannerRoutes from "./route/bannerRoutes.js";
 import categoryRoutes from "./route/categoryRoutes.js";
 import auctionRoutes from "./route/auctionRoutes.js";
 import orderRoutes from "./route/orderRoutes.js";
+import cartRoutes from "./route/cartRoutes.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -36,6 +37,7 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/category", categoryRoutes);
 app.use("/api/auction", auctionRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/cart", cartRoutes);
 
 main()
   .then(() => console.log("Mongodb is successfully connected"))

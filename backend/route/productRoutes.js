@@ -22,6 +22,10 @@ router.post("/create-product", async (req, res) => {
     percent,
   } = req.body;
   try {
+    const existingProduct = await Products.findOne({ title });
+    if (existingProduct) {
+      return res.status(404).send({ message: "Product name exist" });
+    }
     const uploadedImages = [];
     for (const img of image) {
       const result = await cloudinary.uploader.upload(img, {
@@ -49,7 +53,9 @@ router.post("/create-product", async (req, res) => {
       percent,
     });
     const savedProduct = await newProduct.save();
-    res.status(201).send(savedProduct);
+    res
+      .status(201)
+      .send({ message: "Product added successfully", savedProduct });
   } catch (error) {
     console.error("Error creating product", error);
     res.status(500).send({ message: "Failed to create the product" });
@@ -210,6 +216,18 @@ router.put(
 router.delete("/:id", async (req, res) => {
   try {
     const productId = req.params.id;
+    const product = await Products.findById(productId);
+    if (!product) {
+      return res.status(404).send({ message: "Product not found" });
+    }
+
+    for (const img of product.image) {
+      const publicId = img.public_id;
+      if (publicId) {
+        await cloudinary.uploader.destroy(publicId);
+      }
+    }
+
     const deletedProduct = await Products.findByIdAndDelete(productId);
     if (!deletedProduct) {
       return res.status(404).send({ message: "Product not found" });
@@ -266,8 +284,11 @@ router.patch("/remove-on-sale/:id", async (req, res) => {
     const updatedProduct = await Products.findByIdAndUpdate(
       productId,
       {
-        $unset: { onSale: "", oldPrice: "" },
-        $set: { price: product.oldPrice },
+        $unset: { oldPrice: "" },
+        $set: {
+          price: product.oldPrice,
+          "properties.saleType": "",
+        },
       },
       { new: true }
     );
